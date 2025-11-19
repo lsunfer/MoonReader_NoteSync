@@ -8,9 +8,7 @@
 
 **MoonReader NoteSync** 是一个强大的浏览器用户脚本（Userscript），专为 **Moon+ Reader (静读天下)** 用户设计。
 
-它可以直接在浏览器中连接你的 WebDAV 服务器（如坚果云），拉取 .an 格式的笔记备份文件，在网页上以精美的卡片形式展示高亮和笔记，并支持自定义模板导出为 Markdown 或 TXT。
-
-**[English Documentation](https://www.google.com/url?sa=E&q=#english)** | **[中文说明](https://www.google.com/url?sa=E&q=#chinese)**
+移动端配置静读天下WebDAV同步后，网页安装脚本，连接 WEBDAV 服务器（如坚果云），拉取 .an文件并解析，以卡片、JSON等形式展示高亮和笔记，并支持自定义模板导出为 Markdown 或 TXT。
 
 ---
 
@@ -47,13 +45,13 @@
 ### 🚀 安装指南
 
 1. **安装管理器**：  
-   确保你的浏览器已安装 [Tampermonkey (油猴)](https://www.google.com/url?sa=E&q=https%3A%2F%2Fwww.tampermonkey.net%2F) 或 Violentmonkey 扩展。
+   确保你的浏览器已安装 [Tampermonkey (油猴)](https://www.tampermonkey.net/) 或 [ScriptCat 扩展](https://docs.scriptcat.org/)。
 
 2. **安装脚本**：
    
-   - **方法 A (推荐)**: [点击此处安装](你的脚本发布链接，例如GreasyFork或GitHub Raw链接) (发布后替换此链接)。
+   - **方法 A (推荐)**: [点击此处安装](https://github.com/seeyou2n1ght/MoonReader_NoteSync/raw/refs/heads/main/MoonReader%20NoteSync.user.js) 。
    
-   - **方法 B (手动)**: 在 Tampermonkey 中点击 "添加新脚本"，将 script.js 中的代码完整复制粘贴并保存。
+   - **方法 B (手动)**: 在 Tampermonkey 中点击 "添加新脚本"，将 MoonReader NoteSync.user.js 中的代码完整复制粘贴并保存。
 
 ### ⚙️ 配置说明 (以坚果云为例)
 
@@ -71,13 +69,13 @@
    
    - **Folder Path**: .an 文件所在的路径。
      
-     - 默认静读天下备份路径通常为：/MoonReader/Annotations/
+     - 默认静读天下备份路径通常为：/moonReader/.Moon+/Cache/
      
      - 注意：路径首尾请加上斜杠 /。
 
 4. 点击 **Save Settings** 保存。
 
-### 📖 使用方法
+### 📖 使用方法（前置要求是在移动端静读天下已配置Webdav同步）
 
 1. 点击 **🔄 Sync Now** 按钮，脚本将开始从云端拉取笔记。
 
@@ -100,83 +98,5 @@
 - **本地运行**：所有逻辑均在你的浏览器中运行。
 
 - **数据安全**：你的 WebDAV 账号、密码和笔记数据**仅存储在本地** (Tampermonkey 的沙盒存储中)，**绝不会**上传到除了你指定的 WebDAV 服务器以外的任何地方。
-
----
-
-<a name="english"></a>
-
-## 📖 English Documentation
-
-### ✨ Features
-
-- **☁️ WebDAV Sync**: Connects directly to WebDAV servers (e.g., Nextcloud, Nutstore) from the browser.
-
-- **⚡ Incremental Sync**: Downloads only modified files based on timestamps.
-
-- **🧠 Advanced Parsing**:
-  
-  - Uses Pako to handle Moon+ Reader's headless compressed streams (.an files).
-  
-  - **Gap Analysis Algorithm**: Accurately distinguishes between "Highlights" and "Notes".
-
-- **🎨 Modern UI**:
-  
-  - Shadow DOM isolation.
-  
-  - **Card View**, **JSON View**, and **Raw View**.
-  
-  - Glassmorphism design.
-
-- **📤 Export System**:
-  
-  - Export to Markdown (.md) and Text (.txt).
-  
-  - **Custom Templates**: Use variables like {{highlightText}} to customize the output format for Obsidian or Notion.
-
-### 🚀 Installation
-
-1. **Prerequisites**: Install [Tampermonkey](https://www.google.com/url?sa=E&q=https%3A%2F%2Fwww.tampermonkey.net%2F) or Violentmonkey.
-
-2. **Install Script**: Create a new script and paste the content of script.js.
-
-### ⚙️ Configuration
-
-1. Click the **📚 FAB** button on any webpage.
-
-2. Click the **⚙️ (Settings)** button.
-
-3. Fill in your WebDAV details:
-   
-   - **WebDAV URL**: e.g., https://dav.jianguoyun.com/dav/ or your Nextcloud URL.
-   
-   - **Username**: Your WebDAV username.
-   
-   - **Password**: Your WebDAV password (App Token recommended).
-   
-   - **Folder Path**: The path where .an files are stored (e.g., /MoonReader/Annotations/).
-
-4. Click **Save Settings**.
-
-### 🔒 Privacy
-
-- All data processing happens locally in your browser.
-
-- Credentials and notes are stored in the extension's local storage and are **never** sent to any third-party servers.
-
----
-
-## 🛠 Development
-
-Built with:
-
-- Vanilla JavaScript (ES6+)
-
-- Shadow DOM (Web Components)
-
-- [Pako](https://www.google.com/url?sa=E&q=https%3A%2F%2Fgithub.com%2Fnodeca%2Fpako) (Zlib port)
-
-## 📄 License
-
-MIT License. Feel free to modify and distribute.
 
 ---

@@ -10,6 +10,8 @@
 
 移动端配置静读天下WebDAV同步后，网页安装脚本，连接 WEBDAV 服务器（如坚果云），拉取 .an文件并解析，以卡片、JSON等形式展示高亮和笔记，并支持自定义模板导出为 Markdown 或 TXT。
 
+> **Thank you, Gemini 3.**
+
 ---
 
 <a name="chinese"></a>

@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         MoonReader NoteSync v5.0
+// @name         MoonReader NoteSync v5.2
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      5.2.0
 // @description  基于坚果云WebDAV，读取静读天下读书笔记并解析，支持卡片话展示和自定义模板导出(MD/TXT)，优化卡片布局与UI
 // @author       seeyou2night
 // @match        *://*/*
@@ -19,7 +19,8 @@
 
     // --- 1. 配置与常量 ---
     const CONFIG_KEY = 'mr_sync_config_v5';
-    const CACHE_KEY = 'mr_sync_cache_v5';
+    const CACHE_KEY = 'mr_sync_cache_v6';
+    const LEGACY_CACHE_KEY = 'mr_sync_cache_v5';
     const TEMPLATE_KEY = 'mr_sync_template_v5';
     
     const DEFAULT_TEMPLATE = `### {{chapterIndex}}. {{timeString}}
@@ -282,7 +283,7 @@
                     <button class="btn" id="btn-save">Save Settings</button>
                     <button class="btn btn-sec" id="btn-cancel">Cancel</button>
                 </div>
-                <button class="btn btn-danger" id="btn-clear-cache">Clear Cache & Reset</button>
+                <button class="btn btn-danger" id="btn-clear-cache">清理缓存（之后请重新同步）</button>
             </div>
 
             <!-- Export Panel -->
@@ -354,45 +355,122 @@
     }
 
     // --- 8. 核心：Gap Analysis 解析 ---
+    function normalizeNoteText(value, removeTrailingOne = false) {
+        let result = String(value == null ? '' : value).replace(/\r\n?/g, '\n');
+
+        // 静读天下可能在高亮开头写入 <BR>；开头的标签不应形成空白行。
+        result = result.replace(/^\s*(?:<br\s*\/?>\s*)+/i, '');
+
+        // 正文中间的 <BR> 转换为真正的换行。
+        result = result.replace(/<br\s*\/?>/gi, '\n');
+
+        // 部分 .an 记录会把独立的数字 1 附加在高亮正文末尾。
+        // 只移除末尾独立一行的 1，不碰正文中的其他数字。
+        if (removeTrailingOne) {
+            result = result.replace(/\n[ \t]*1[ \t]*$/, '');
+        }
+
+        return result;
+    }
+
+    function isDeletedNote(note) {
+        const marker = /\*DELETED\*/i;
+        return marker.test(String(note.highlightText || '')) ||
+               marker.test(String(note.userNote || ''));
+    }
+
     function parseMoonReaderContent(text) {
         const sections = text.split(/\n#\r?\n/);
         const notes = [];
+
         for (let i = 1; i < sections.length; i++) {
-            let section = sections[i].trim();
+            const section = sections[i].trim();
             if (!section) continue;
+
+            // 删除记录保留了 *DELETED* 墓碑标记，不作为有效笔记解析。
+            if (/\*DELETED\*/i.test(section)) continue;
+
             const lines = section.split(/\n/).map(l => l.trimEnd());
             if (lines.length < 10) continue;
 
-            const ts = parseInt(lines[9]) || 0;
+            const ts = parseInt(lines[9], 10) || 0;
+            const startPos = parseInt(lines[6], 10) || 0;
+
             const noteData = {
-                id: lines[0], bookTitle: lines[1], chapterIndex: parseInt(lines[4])||0,
-                startPos: parseInt(lines[6])||0, length: parseInt(lines[7])||0, colorCode: lines[8],
-                timestamp: ts, timeString: ts > 0 ? new Date(ts).toLocaleString() : "",
-                userNote: "", highlightText: "", page: Math.floor(parseInt(lines[6])/1000) // 估算页码
+                id: lines[0],
+                bookTitle: lines[1],
+                chapterIndex: parseInt(lines[4], 10) || 0,
+                startPos,
+                length: parseInt(lines[7], 10) || 0,
+                colorCode: lines[8],
+                timestamp: ts,
+                // 明确采用 24 小时制；时间戳仍保留原始毫秒精度。
+                timeString: ts > 0
+                    ? new Date(ts).toLocaleString('zh-CN', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hourCycle: 'h23'
+                    })
+                    : '',
+                userNote: '',
+                highlightText: '',
+                page: Math.floor(startPos / 1000) // 估算页码
             };
 
             // Gap Analysis
             let firstContentIndex = -1;
             for (let k = 10; k < lines.length; k++) {
-                const l = lines[k].trim();
-                if (l !== "" && l !== "0") { firstContentIndex = k; break; }
+                const line = lines[k].trim();
+                if (line !== '' && line !== '0') {
+                    firstContentIndex = k;
+                    break;
+                }
             }
 
             if (firstContentIndex !== -1) {
                 let lastContentIndex = lines.length - 1;
-                while(lastContentIndex >= firstContentIndex && (lines[lastContentIndex].trim() === '0' || lines[lastContentIndex].trim() === '')) { lastContentIndex--; }
+                while (
+                    lastContentIndex >= firstContentIndex &&
+                    (lines[lastContentIndex].trim() === '0' ||
+                     lines[lastContentIndex].trim() === '')
+                ) {
+                    lastContentIndex--;
+                }
+
                 const contentLines = lines.slice(firstContentIndex, lastContentIndex + 1);
                 const gap = firstContentIndex - 10;
 
                 if (gap === 1) {
-                    noteData.userNote = contentLines[0].replace(/<BR>/gi, '\n');
-                    if (contentLines.length > 1) noteData.highlightText = contentLines.slice(1).join('\n');
+                    noteData.userNote = normalizeNoteText(contentLines[0]);
+                    if (contentLines.length > 1) {
+                        noteData.highlightText = normalizeNoteText(
+                            contentLines.slice(1).join('\n'),
+                            true
+                        );
+                    }
                 } else {
-                    noteData.highlightText = contentLines.join('\n');
+                    noteData.highlightText = normalizeNoteText(
+                        contentLines.join('\n'),
+                        true
+                    );
                 }
             }
-            if(noteData.userNote || noteData.highlightText) notes.push(noteData);
+
+            // 再次检查解析后的字段，避免删除标记被字段划分隐藏。
+            if (isDeletedNote(noteData)) continue;
+
+            if (noteData.userNote || noteData.highlightText) {
+                notes.push(noteData);
+            }
         }
+
+        // 使用原始 Unix 毫秒时间戳排序，不依赖显示用的 timeString。
+        notes.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
         return { raw: text, json: notes };
     }
 
@@ -462,12 +540,18 @@
         GM_setValue(TEMPLATE_KEY, tpl); // 保存模板
         
         let content = "";
-        currentBookData.data.forEach(note => {
+        currentBookData.data
+            .filter(note => !isDeletedNote(note))
+            .slice()
+            .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+            .forEach(note => {
             let item = tpl;
-            // 替换变量
+            // 替换变量；用函数返回值，避免正文中的 $ 字符被 replace 当作特殊替换符。
             for (const key in note) {
-                const val = note[key] !== undefined ? note[key] : "";
-                item = item.replace(new RegExp(`{{${key}}}`, 'g'), val);
+                let val = note[key] !== undefined ? note[key] : "";
+                if (key === 'highlightText') val = normalizeNoteText(val, true);
+                if (key === 'userNote') val = normalizeNoteText(val, false);
+                item = item.replace(new RegExp(`{{${key}}}`, 'g'), () => String(val));
             }
             // 清理未定义的空变量
             item = item.replace(/{{.*?}}/g, "");
@@ -502,7 +586,7 @@
 
     function renderContent(book) {
         ui.headerTitle.textContent = book.displayName; ui.contentArea.innerHTML = ''; ui.contentArea.scrollTop = 0;
-        const data = book.data || [];
+        const data = (book.data || []).slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).filter(note => !isDeletedNote(note));
         
         if (currentViewMode === 'raw') {
             const content = book.raw || "No raw content.";
@@ -545,7 +629,18 @@
         config = { url: ui.inputs.url.value, username: ui.inputs.user.value, password: ui.inputs.pass.value, folder: ui.inputs.folder.value };
         GM_setValue(CONFIG_KEY, JSON.stringify(config)); ui.settingsLayer.classList.remove('show'); showToast("Settings Saved");
     };
-    ui.btnClearCache.onclick = () => { if(confirm("Clear all cache?")){GM_deleteValue(CACHE_KEY); renderBookList({}); ui.contentArea.innerHTML=''; showToast("Cache Cleared"); ui.settingsLayer.classList.remove('show');} };
+    ui.btnClearCache.onclick = () => {
+        if (confirm("清理本插件的笔记解析缓存？不会删除 WebDAV 中的笔记、账号设置或导出模板。清理后请点击 Sync Now 重新同步。")) {
+            GM_deleteValue(CACHE_KEY);
+            GM_deleteValue(LEGACY_CACHE_KEY);
+            currentBookData = null;
+            renderBookList({});
+            ui.headerTitle.textContent = "Select a book to view";
+            ui.contentArea.innerHTML = '';
+            showToast("缓存已清理，请重新同步");
+            ui.settingsLayer.classList.remove('show');
+        }
+    };
     
     // Export
     ui.exportBtn.onclick = () => ui.exportLayer.classList.add('show');

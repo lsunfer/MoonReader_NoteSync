@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         MoonReader NoteSync v5.6.0
+// @name         MoonReader NoteSync v5.6.1
 // @namespace    http://tampermonkey.net/
-// @version      5.6.0
-// @description  PDF多条笔记解析；Raw/JSON虚拟滚动、全文搜索与复制，适合超大笔记集
+// @version      5.6.1
+// @description  按当前选中书籍按需解析；Raw不触发笔记解析；各书籍视图缓存，保留虚拟滚动
 // @author       seeyou2night
 // @match        *://*/*
 // @require      https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js
@@ -19,10 +19,10 @@
 
     // --- 1. 配置与常量 ---
     const CONFIG_KEY = 'mr_sync_config_v5';
-    const CACHE_KEY = 'mr_sync_cache_v12'; // v12：按需解析当前书籍，并缓存各书籍的解析结果
+    const CACHE_KEY = 'mr_sync_cache_v13'; // v13：Raw不解析JSON；按书籍文件名和内容缓存派生视图
     const LEGACY_CACHE_KEY = 'mr_sync_cache_v5';
     const TEMPLATE_KEY = 'mr_sync_template_v5';
-
+    
     const DEFAULT_TEMPLATE = `### {{chapterIndex}}. {{timeString}}
 > {{highlightText}}
 
@@ -46,23 +46,41 @@
     let currentViewMode = 'card';
     let currentBookData = null;
 
-    // 每本书独立缓存：只在首次打开对应视图时计算，切换视图时直接复用。
-    const bookViewCache = new WeakMap();
+    // 每本书按 fileKey 独立缓存。缓存只存在于当前页面会话中：
+    // 切换书籍/视图不丢失；Sync Now 后若文件内容未变则继续复用；
+    // 文件内容变化时自动作废该书的派生缓存；刷新网页后自然清空。
+    const bookViewCache = new Map();
 
     function getBookViewCache(book) {
-        let cache = bookViewCache.get(book);
-        if (!cache) { cache = {}; bookViewCache.set(book, cache); }
+        const key = book.fileKey || book.displayName;
+        const rawText = book.raw || '';
+        let cache = bookViewCache.get(key);
+        if (!cache || cache.rawText !== rawText) {
+            cache = {
+                rawText,
+                data: Array.isArray(book.data) ? book.data : null,
+                sortedData: null,
+                jsonText: undefined,
+                jsonLineStarts: null,
+                rawLineStarts: null
+            };
+            bookViewCache.set(key, cache);
+        } else if (!cache.data && Array.isArray(book.data)) {
+            cache.data = book.data;
+        }
         return cache;
     }
 
     function ensureBookParsed(book) {
-        if (!book) return;
-        if (!Array.isArray(book.data)) {
+        if (!book) return [];
+        const cache = getBookViewCache(book);
+        if (!cache.data) {
             const parsed = parseMoonReaderContent(book.raw || '');
-            book.data = parsed.json;
-            // 解析结果保留在当前书籍对象中；不重写包含所有原始文件的大缓存，避免产生额外长耗时。
+            cache.data = parsed.json;
         }
-        return book.data;
+        // 同时挂回当前书籍对象，兼容导出和原有调用；不会解析其他书籍。
+        book.data = cache.data;
+        return cache.data;
     }
 
     // --- 2. UI 构建 (Shadow DOM) ---
@@ -86,7 +104,7 @@
             z-index: 99999;
         }
         * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
-
+        
         /* 滚动条美化 */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
@@ -120,7 +138,7 @@
             display: flex; justify-content: space-between; align-items: center;
         }
         .status-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: #e2e8f0; color: var(--text-sub); font-weight: 500;}
-
+        
         .book-list { flex: 1; overflow-y: auto; padding: 10px; }
         .book-item {
             padding: 10px 12px; margin-bottom: 4px; border-radius: 8px; cursor: pointer;
@@ -140,7 +158,7 @@
             display: flex; justify-content: space-between; align-items: center;
         }
         .header-title { font-weight: 600; font-size: 16px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 350px;}
-
+        
         .view-tabs { display: flex; background: #f1f5f9; padding: 3px; border-radius: 8px; gap: 2px; }
         .tab-btn {
             padding: 6px 12px; font-size: 12px; cursor: pointer; border-radius: 6px;
@@ -172,7 +190,7 @@
             display: flex; flex-direction: column;
         }
         .note-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
-
+        
         /* 1. 高亮区域 (上) */
         .card-highlight {
             padding: 16px 20px;
@@ -226,7 +244,7 @@
             font-size: 13px; font-family: inherit; transition: border 0.2s; outline: none; resize: vertical;
         }
         input:focus, textarea:focus { border-color: var(--primary); }
-
+        
         .btn-group { display: flex; gap: 10px; }
         .btn {
             padding: 9px 16px; background: var(--primary); color: white; border: none; border-radius: 6px;
@@ -246,9 +264,9 @@
         }
         .toast.show { opacity: 1; }
 
-        .variable-tag {
-            display: inline-block; padding: 2px 6px; background: #e0e7ff; color: var(--primary);
-            border-radius: 4px; font-size: 11px; margin-right: 4px; margin-bottom: 4px; cursor: pointer;
+        .variable-tag { 
+            display: inline-block; padding: 2px 6px; background: #e0e7ff; color: var(--primary); 
+            border-radius: 4px; font-size: 11px; margin-right: 4px; margin-bottom: 4px; cursor: pointer; 
         }
         .variable-tag:hover { background: #c7d2fe; }
     `;
@@ -265,7 +283,7 @@
             <!-- Sidebar -->
             <div class="sidebar">
                 <div class="sidebar-header">
-                    <span>NoteSync <span style="opacity:0.5; font-weight:400">Pro</span></span>
+                    <span>NoteSync <span style="opacity:0.5; font-weight:400">Pro v5.6.1</span></span>
                     <span class="status-badge" id="status-badge">Idle</span>
                 </div>
                 <div class="book-list" id="book-list"></div>
@@ -299,7 +317,7 @@
                 </div>
                 <div class="toast" id="toast">Notification</div>
             </div>
-
+            
             <!-- Config Panel -->
             <div class="overlay-panel" id="settings-layer">
                 <h3 style="margin:0">Configuration</h3>
@@ -342,9 +360,9 @@
 
     // --- 5. DOM 引用 ---
     const ui = {
-        fab: shadow.getElementById('fab'), panel: shadow.getElementById('panel'), close: shadow.getElementById('btn-close'),
+        fab: shadow.getElementById('fab'), panel: shadow.getElementById('panel'), close: shadow.getElementById('btn-close'), 
         sync: shadow.getElementById('btn-sync'), configBtn: shadow.getElementById('btn-config'), exportBtn: shadow.getElementById('btn-export-ui'),
-        bookList: shadow.getElementById('book-list'), contentArea: shadow.getElementById('content-area'), headerTitle: shadow.getElementById('header-title'),
+        bookList: shadow.getElementById('book-list'), contentArea: shadow.getElementById('content-area'), headerTitle: shadow.getElementById('header-title'), 
         settingsLayer: shadow.getElementById('settings-layer'), exportLayer: shadow.getElementById('export-layer'),
         statusBadge: shadow.getElementById('status-badge'), toast: shadow.getElementById('toast'),
         inputs: { url: shadow.getElementById('inp-url'), user: shadow.getElementById('inp-user'), pass: shadow.getElementById('inp-pass'), folder: shadow.getElementById('inp-folder'), template: shadow.getElementById('inp-template') },
@@ -356,7 +374,7 @@
     // --- 6. 工具函数 ---
     const showToast = (msg) => { ui.toast.textContent = msg; ui.toast.classList.add('show'); setTimeout(() => ui.toast.classList.remove('show'), 2500); };
     const escapeHtml = (str) => (!str ? '' : str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
-
+    
     // --- 7. 核心：WebDAV 与 解压 ---
     const getAuthHeader = () => 'Basic ' + btoa(unescape(encodeURIComponent(config.username + ':' + config.password)));
     const joinUrl = (baseUrl, path) => {
@@ -691,7 +709,10 @@
                 // 移除服务器目录中已经不存在的文件缓存。
                 const remoteNames = new Set(files.map(f => f.name));
                 Object.keys(updatedCache).forEach(name => {
-                    if (!remoteNames.has(name)) delete updatedCache[name];
+                    if (!remoteNames.has(name)) {
+                        delete updatedCache[name];
+                        bookViewCache.delete(name);
+                    }
                 });
 
                 GM_setValue(CACHE_KEY, JSON.stringify(updatedCache));
@@ -717,13 +738,15 @@
 
     // --- 10. 导出逻辑 (新增) ---
     function handleExport(type) {
-        if (!currentBookData || !currentBookData.data) { showToast("No book selected!"); return; }
-
+        if (!currentBookData) { showToast("No book selected!"); return; }
+        const exportData = ensureBookParsed(currentBookData);
+        if (!Array.isArray(exportData)) { showToast("No notes available!"); return; }
+        
         const tpl = ui.inputs.template.value;
         GM_setValue(TEMPLATE_KEY, tpl); // 保存模板
-
+        
         let content = "";
-        currentBookData.data
+        exportData
             .filter(note => !isDeletedNote(note))
             .slice()
             .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
@@ -772,11 +795,11 @@
                 Array.from(ui.bookList.children).forEach(c => c.classList.remove('active'));
                 el.classList.add('active');
                 currentBookData = book;
-                ensureBookParsed(book);
-                // 首次解析后同步更新左侧数量；只更新当前选中书籍。
-                const info = el.querySelector('.book-info span:last-child');
-                if (info) info.textContent = `${book.data.length} notes`;
+                // 由当前选中的视图决定是否解析：Raw 只展示原文，不触发 JSON/笔记解析。
                 renderContent(book);
+                const info = el.querySelector('.book-info span:last-child');
+                const cachedData = getBookViewCache(book).data;
+                if (info && Array.isArray(cachedData)) info.textContent = `${cachedData.length} notes`;
             });
             ui.bookList.appendChild(el);
 
@@ -911,10 +934,9 @@
         ui.contentArea.innerHTML = '';
         ui.contentArea.scrollTop = 0;
 
-        // 安全兜底：正常情况下在选中书籍时已解析；这里确保外部调用也不会漏解析。
-        const data = ensureBookParsed(book) || [];
         const cached = getBookViewCache(book);
 
+        // Raw 是原始解压文本的只读展示，不需要解析笔记，也不需要生成 JSON。
         if (currentViewMode === 'raw') {
             const rawText = book.raw || 'No raw content.';
             if (cached.rawText !== rawText) {
@@ -925,6 +947,9 @@
             createVirtualTextViewer(rawText, 'raw', cached.rawLineStarts);
             return;
         }
+
+        // 只有 Card / JSON 视图才解析当前选中的这一本书。
+        const data = ensureBookParsed(book) || [];
 
         if (currentViewMode === 'json') {
             if (!cached.sortedData) {
@@ -961,7 +986,7 @@
     // --- 12. 事件监听 ---
     ui.fab.onclick = () => ui.panel.classList.toggle('open');
     ui.close.onclick = () => ui.panel.classList.remove('open');
-
+    
     // Config
     ui.configBtn.onclick = () => ui.settingsLayer.classList.add('show');
     ui.btnCancel.onclick = () => ui.settingsLayer.classList.remove('show');
@@ -972,6 +997,7 @@
     ui.btnClearCache.onclick = () => {
         if (confirm("清理本插件的笔记解析缓存？不会删除 WebDAV 中的笔记、账号设置或导出模板。清理后请点击 Sync Now 重新同步。")) {
             GM_deleteValue(CACHE_KEY);
+            GM_deleteValue('mr_sync_cache_v12');
             GM_deleteValue('mr_sync_cache_v11');
             GM_deleteValue('mr_sync_cache_v10');
             GM_deleteValue('mr_sync_cache_v9');
@@ -987,13 +1013,13 @@
             ui.settingsLayer.classList.remove('show');
         }
     };
-
+    
     // Export
     ui.exportBtn.onclick = () => ui.exportLayer.classList.add('show');
     ui.btnCloseExport.onclick = () => ui.exportLayer.classList.remove('show');
     ui.btnDlMd.onclick = () => handleExport('md');
     ui.btnDlTxt.onclick = () => handleExport('txt');
-
+    
     // Helper: copy var name
     ui.vars.forEach(v => v.onclick = (e) => {
         const val = e.target.textContent;
@@ -1006,7 +1032,7 @@
         ui.tabs.forEach(x => x.classList.remove('active')); e.target.classList.add('active');
         currentViewMode = e.target.dataset.mode; if (currentBookData) renderContent(currentBookData);
     });
-
+    
     ui.sync.onclick = startSync;
 
     // Init
